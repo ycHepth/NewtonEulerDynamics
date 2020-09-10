@@ -8,9 +8,10 @@ function torque = NewtonEulerDynamics(dh_list,mass_list,mass_center_list,inertia
 %       torque_list: [q,dq,ddq]
 % 
 % Note:
-%       1. the DH coordinate must be modified coordinate.
-%       2. required inertia tensor before modeling
-%       3. for no disturbance case, f_external = 0
+%       1. DH parameters based on modified DH approach.
+%       2. required inertia tensor of linkage system before modeling
+%       3. for no disturbance case, f_external = 0, which consist of force
+%       and torque.
 
 [rows,cols] = size(dh_list);
 number_of_links = rows-1;
