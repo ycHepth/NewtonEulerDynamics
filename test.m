@@ -27,4 +27,4 @@ inertia_tensor_list(:,:,2) = inertia_2;
 f_ext = [0 0 0;
          0 0 0];
      
-torque = NewtonEulerDynamics(dh_params, mass, mass_center, inertia_tensor_list, f_ext);
+[torque,torque_linear] = NewtonEulerDynamics(dh_params, mass, mass_center, inertia_tensor_list, f_ext);

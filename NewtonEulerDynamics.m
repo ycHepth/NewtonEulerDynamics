@@ -1,4 +1,4 @@
-function torque = NewtonEulerDynamics(dh_list,mass_list,mass_center_list,inertia_tensor_list,f_external)
+function [torque,torque_linear] = NewtonEulerDynamics(dh_list,mass_list,mass_center_list,inertia_tensor_list,f_external)
 % Newton_Euler approach to obtain robot linkage dynamics
 % Input:
 %       dh_list: modified DH list
@@ -26,6 +26,11 @@ a = sym([]);
 d = sym([]);
 alpha = sym([]);
 theta = sym([]);
+
+% inertia parameters vector
+PI = sym([]);
+A  = sym([]);
+H  = sym([]);
 
 for i = 1:rows
     eval(['syms ','q',num2str(i),' real;']);
@@ -57,6 +62,10 @@ for i = 1:rows
    T = T(:,:,i);
    
 %    extract inverse matrix of rotate matrix R
+%  notice the feather of transform matrix: R' = invR
+%  thus, the inverse of matrix R indeed is the transport of matrix R 
+%  (i.e. R' == invR , where R means {i -> i+1} and R' measn {i+1 -> i} )
+
    R(:,:,i) = simplify(inv(T(1:3,1:3)));
    P(:,:,i) = T(1:3,4:4);
    
@@ -64,13 +73,30 @@ end
 
    z = [0;0;1];
    syms g real;
-   
+%    ======================================================================
+%    inertia parameters vector PI
+for i = 1:number_of_links
+
+    I = inertia_tensor_list(:,:,i);
+    Ixx = I(1,1);
+    Ixy = I(1,2);
+    Ixz = I(1,3);
+    Iyy = I(2,2);
+    Iyz = I(2,3);
+    Izz = I(3,3);
+
+    PI(:,i) = [Ixx Ixy Ixz Iyy Iyz Izz mass_list(i)*mass_center_list(i,:) mass_list(i)]';
+end
+
+    VPI = [PI(:,1)' PI(:,2)']';
+        
+        
 %    forward : 0 --> links-1
    for i = 0:number_of_links-1
        if i == 0
            wi  = [0 0 0]';
            dwi = [0 0 0]';
-           dvi = [0 g 0]';
+           dvi = [0 0 g]';
 %      here applied 'g' at y-axis meaning robot side-assembly
 %      the specify direction of 'g' associated with robot coordinate
 %      establish.
@@ -86,6 +112,11 @@ end
 %        origin acceleration
        dv(:,:,i+1)  = R(:,:,i+1)*(cross(dwi,P(:,:,i+1)) + cross(wi,cross(wi,P(:,:,i+1))) + dvi);
 %        mass center acceleraion
+
+
+% %   ==== VERIFY CROSS MATRIX === 
+%     OriginR = cross(dwi,P(:,:,i+1))
+%     ModifiedR = crossMatrix(dwi)*P(:,:,i+1)
 
 % ==========   !!! NOTE   ======================
 % here the 'dvc' is acceleration of mess center,
@@ -121,7 +152,10 @@ end
 % -------------------------------------------------------------------------------
 
        F(:,:,i+1) = mass_list(i+1)*dvc(:,:,i+1);
-       
+%      calculate H
+       O = crossMatrix(dw(:,:,i+1)) + crossMatrix(w(:,:,i+1))*crossMatrix(w(:,:,i+1));
+       H(:,:,i+1) = [zeros(3,6) O  dv(:,:,i+1)];
+
 %  =============== 
 %          sum torque N
 %  ===============
@@ -136,10 +170,14 @@ end
 %  thus N can be simplify as
 %  N = [K(dw) + S(w)K(w) | 0] * P
 %  let A = [K(dw) + S(w)K(w) | 0] 
-%  then N = AP
+%  then N = AP , where N = 3x1, P = 10x1, A = 3x10
 
-       N(:,:,i+1) = inertia_tensor_list(:,:,i+1)*dw(:,:,i+1) + cross(w(:,:,i+1),inertia_tensor_list(:,:,i+1)*w(:,:,i+1));    
+       N(:,:,i+1) = inertia_tensor_list(:,:,i+1)*dw(:,:,i+1) + cross(w(:,:,i+1),inertia_tensor_list(:,:,i+1)*w(:,:,i+1));
        
+       Kdw = kMartix(dw(:,:,i+1));
+       Kw  = kMartix(w(:,:,i+1));
+       Sw  = crossMatrix(w(:,:,i+1));
+       A(:,:,i+1) = [Kdw + Sw*Kw  zeros(3,4)]; 
    end
 %  ===== above 2 parameters used for seperating inertia parameters =====
 
@@ -155,16 +193,18 @@ end
     
     f(:,:,i) = R(:,:,i+1)\f(:,:,i+1) + F(:,:,i);
     f(:,:,i) = simplify(f(:,:,i));
+    
+%     torque balance equation
     n(:,:,i) = N(:,:,i) + R(:,:,i+1)\n(:,:,i+1) + cross(mass_center_list(i,:)',F(:,:,i))...
                 + cross(P(:,:,i+1),R(:,:,i+1)\f(:,:,i+1));
     n(:,:,i) = simplify(n(:,:,i));
 
-%    ===== above all parameters used for seperating inertia parameters ===== 
-
+%    ===== above all parameters used for seperating inertia parameters =====
     torque_list(i) = dot(n(:,:,i),z);
     end
     
 torque = torque_list';
+
 
 %     define n = YP, where P is inertia parameters vector
 %     then for number of linkage = 6 
@@ -186,17 +226,46 @@ torque = torque_list';
 %     Y_2 = [[0 A2 0 0 0 0] + R3\Y3 + S(Pos_3)R5\Yf_3 + S(center_3)F3]
 %     Y_1 = [[A1 0 0 0 0 0] + R2\Y2 + S(Pos_2)R5\Yf_2 + S(center_2)F2]
 
-%    torque = [Z'Y1 Z'Y2 Z'Y3 Z'Y4 Z¡®Y5 Z'Y6]' P 
+%  for recognize matrix Yf
+%     YF_6 = [ 0 0 0 0 0 H6]
+%     YF_5 = [[0 0 0 0 H5 0] + R6\YF_6]
+%     YF_4 = [[0 0 0 H4 0 0] + R5\YF_5]
+%     YF_3 = [[0 0 H3 0 0 0] + R4\YF_4]
+%     YF_2 = [[0 H2 0 0 0 0] + R3\YF_3]
+%     YF_1 = [[H1 0 0 0 0 0] + R2\YF_2]
+
+%    torque = [Z'Y1 Z'Y2 Z'Y3 Z'Y4 Z'Y5 Z'Y6]' P 
 %    the result of linearization of dynamics:
-%    Y = [Z'Y1 Z'Y2 Z'Y3 Z'Y4 Z¡®Y5 Z'Y6]'
+%    Y = [Z'Y1 Z'Y2 Z'Y3 Z'Y4 Z'Y5 Z'Y6]'
+
+for i = number_of_links:-1:1
+    if i == number_of_links
+        Yf(:,:,i) = [zeros(3,10) H(:,:,i)];
+        Y(:,:,i)  = [zeros(3,10) A(:,:,i)];
+    else
+        Yf(:,:,i) = [ H(:,:,i) zeros(3,10)]...
+                    + R(:,:,i+1)\Yf(:,:,i+1);
+        Y(:,:,i)  = [ A(:,:,i) zeros(3,10)]...
+                    + R(:,:,i+1)\Y(:,:,i+1)...
+                    + crossMatrix(P(:,:,i+1))*(R(:,:,i+1)\Yf(:,:,i+1))...
+                    + crossMatrix(mass_center_list(i+1,:)')* F(:,:,i+1);
+    end
+end
+
+paraY = [z'*Y(:,:,1);
+         z'*Y(:,:,2);]
+     
+paraY = simplify(paraY);
+
+disp('size of VPI')
+size(VPI)
+disp('size of Y')
+size(Y)
+% 
+torque_linear = paraY*VPI;
+% torque_linear = simplify(torque_linear);
    
-       
-    
-   
-   
-   
-   
-   
+% diff = torque_linear - torque
    
    
             
